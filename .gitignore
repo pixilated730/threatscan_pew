@@ -12,7 +12,6 @@ ENV/
 logs/
 
 results/
-*.txt
 *.xml
 *.json
 
