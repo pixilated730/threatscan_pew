@@ -1,4 +1,4 @@
-# /mnt/e/development/work/Google/ThreatScanUI/backend/app.py
+# ThreatScanUI/backend/app.py
 
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
@@ -13,6 +13,7 @@ import logging
 import platform
 import sys
 import shutil
+import tempfile
 
 try:
     from .os_utils import detect_os, get_install_hint_for_os
@@ -32,23 +33,221 @@ OS_INFO = detect_os()
 BASE_DIR = Path(__file__).parent.parent
 RESULTS_DIR = BASE_DIR / 'results'
 LOGS_DIR = BASE_DIR / 'logs'
+TOOLS_DIR = BASE_DIR / 'tools'
 SCAN_SCRIPT = BASE_DIR / 'backend' / 'threatscan.py'
 
 RESULTS_DIR.mkdir(exist_ok=True)
 LOGS_DIR.mkdir(exist_ok=True)
+TOOLS_DIR.mkdir(exist_ok=True)
 
 active_scans = {}
 installation_progress = {}
+
+# Extended tool definitions with proper installation methods
+TOOL_DEFINITIONS = {
+    # Go-based tools
+    'subfinder': {
+        'type': 'go',
+        'description': 'Fast passive subdomain enumeration tool',
+        'install': {
+            'go_package': 'github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest',
+            'verify': 'subfinder -version'
+        }
+    },
+    'httpx': {
+        'type': 'go',
+        'description': 'Fast HTTP toolkit',
+        'install': {
+            'go_package': 'github.com/projectdiscovery/httpx/cmd/httpx@latest',
+            'verify': 'httpx -version'
+        }
+    },
+    'nuclei': {
+        'type': 'go',
+        'description': 'Fast vulnerability scanner',
+        'install': {
+            'go_package': 'github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest',
+            'verify': 'nuclei -version'
+        }
+    },
+    'assetfinder': {
+        'type': 'go',
+        'description': 'Find domains and subdomains',
+        'install': {
+            'go_package': 'github.com/tomnomnom/assetfinder@latest',
+            'verify': 'assetfinder --help'
+        }
+    },
+    'waybackurls': {
+        'type': 'go',
+        'description': 'Fetch URLs from Wayback Machine',
+        'install': {
+            'go_package': 'github.com/tomnomnom/waybackurls@latest',
+            'verify': 'waybackurls -h'
+        }
+    },
+    'gau': {
+        'type': 'go',
+        'description': 'Get All URLs from multiple sources',
+        'install': {
+            'go_package': 'github.com/lc/gau/v2/cmd/gau@latest',
+            'verify': 'gau --version'
+        }
+    },
+    'hakrawler': {
+        'type': 'go',
+        'description': 'Web crawler for gathering URLs',
+        'install': {
+            'go_package': 'github.com/hakluke/hakrawler@latest',
+            'verify': 'hakrawler -h'
+        }
+    },
+    'dnsx': {
+        'type': 'go',
+        'description': 'Fast DNS toolkit',
+        'install': {
+            'go_package': 'github.com/projectdiscovery/dnsx/cmd/dnsx@latest',
+            'verify': 'dnsx -version'
+        }
+    },
+    'katana': {
+        'type': 'go',
+        'description': 'Next-generation crawling framework',
+        'install': {
+            'go_package': 'github.com/projectdiscovery/katana/cmd/katana@latest',
+            'verify': 'katana -version'
+        }
+    },
+    
+    # Binary downloads
+    'findomain': {
+        'type': 'binary',
+        'description': 'Fast subdomain enumeration tool',
+        'install': {
+            'linux': {
+                'url': 'https://github.com/findomain/findomain/releases/latest/download/findomain-linux',
+                'filename': 'findomain',
+                'verify': 'findomain --version'
+            }
+        }
+    },
+    'amass': {
+        'type': 'binary',
+        'description': 'In-depth attack surface mapping',
+        'install': {
+            'linux': {
+                'url': 'https://github.com/owasp-amass/amass/releases/latest/download/amass_Linux_amd64.zip',
+                'filename': 'amass',
+                'extract': True,
+                'verify': 'amass version'
+            }
+        }
+    },
+    
+    # Git clone tools
+    'subgit': {
+        'type': 'git',
+        'description': 'Git repository scanner for exposed .git',
+        'install': {
+            'repo': 'https://github.com/kevzy/subgit.git',
+            'script': 'subgit',
+            'verify': 'subgit --help || echo "subgit installed"'
+        }
+    },
+    'crtsh': {
+        'type': 'git',
+        'description': 'Certificate transparency subdomain enum',
+        'install': {
+            'repo': 'https://github.com/YashGoti/crtsh.git',
+            'script': 'crtsh.py',
+            'verify': 'python3 $(which crtsh) -h || echo "crtsh installed"'
+        }
+    },
+    
+    # Python tools
+    'wafw00f': {
+        'type': 'pip',
+        'description': 'Web Application Firewall detector',
+        'install': {
+            'package': 'wafw00f',
+            'verify': 'wafw00f -h'
+        }
+    },
+    'sublist3r': {
+        'type': 'pip',
+        'description': 'Fast subdomain enumeration using search engines',
+        'install': {
+            'package': 'sublist3r',
+            'verify': 'sublist3r -h'
+        }
+    },
+    'dnsrecon': {
+        'type': 'pip',
+        'description': 'DNS enumeration and scanning tool',
+        'install': {
+            'package': 'dnsrecon',
+            'verify': 'dnsrecon -h'
+        }
+    },
+    
+    # System packages
+    'nmap': {
+        'type': 'system',
+        'description': 'Network mapper and port scanner',
+        'install': {
+            'apt': 'nmap',
+            'yum': 'nmap',
+            'pacman': 'nmap',
+            'brew': 'nmap',
+            'verify': 'nmap --version'
+        }
+    },
+    'masscan': {
+        'type': 'system',
+        'description': 'Fast port scanner',
+        'install': {
+            'apt': 'masscan',
+            'yum': 'masscan',
+            'pacman': 'masscan',
+            'brew': 'masscan',
+            'verify': 'masscan --version'
+        }
+    },
+    'whois': {
+        'type': 'system',
+        'description': 'WHOIS lookup tool',
+        'install': {
+            'apt': 'whois',
+            'yum': 'whois',
+            'pacman': 'whois',
+            'brew': 'whois',
+            'verify': 'whois --version'
+        }
+    },
+    'dig': {
+        'type': 'system',
+        'description': 'DNS lookup tool',
+        'install': {
+            'apt': 'dnsutils',
+            'yum': 'bind-utils',
+            'pacman': 'bind-tools',
+            'brew': 'bind',
+            'verify': 'dig -v'
+        }
+    }
+}
 
 def find_tool_in_common_paths(tool_name):
     """Check common installation paths for a tool"""
     common_paths = [
         os.path.expanduser('~/go/bin'),
-        '/usr/local/go/bin',
+        os.path.expanduser('~/.local/bin'),
         '/usr/local/bin',
         '/usr/bin',
         '/bin',
-        os.path.expanduser('~/.local/bin'),
+        '/usr/local/go/bin',
+        os.path.expanduser('~/bin'),
+        str(TOOLS_DIR),
     ]
     
     try:
@@ -65,6 +264,11 @@ def find_tool_in_common_paths(tool_name):
         tool_path = os.path.join(path, tool_name)
         if os.path.exists(tool_path) and os.access(tool_path, os.X_OK):
             return tool_path
+        
+        # Also check with .py extension for Python scripts
+        tool_path_py = os.path.join(path, f"{tool_name}.py")
+        if os.path.exists(tool_path_py):
+            return tool_path_py
     
     tool_location = shutil.which(tool_name)
     if tool_location:
@@ -72,161 +276,204 @@ def find_tool_in_common_paths(tool_name):
     
     return None
 
-def get_install_commands(tool_name):
-    """Get platform-specific installation commands"""
-    os_system = OS_INFO['system']
-    is_termux = OS_INFO['is_termux']
+def install_go_tool(tool_name, package, progress_callback):
+    """Install a Go-based tool"""
+    progress_callback(f"Installing Go package: {package}")
+    
+    env = os.environ.copy()
+    gopath = subprocess.run(['go', 'env', 'GOPATH'], 
+                          capture_output=True, text=True).stdout.strip()
+    if gopath:
+        gobin = os.path.join(gopath, 'bin')
+        env['PATH'] = f"{gobin}:{env.get('PATH', '')}"
+        env['GOPATH'] = gopath
+    
+    cmd = f'go install -v {package}'
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, env=env, timeout=300)
+    
+    if result.returncode == 0:
+        progress_callback(f"Successfully installed {tool_name}")
+        return True
+    else:
+        progress_callback(f"Failed to install {tool_name}: {result.stderr}")
+        return False
+
+def install_binary_tool(tool_name, config, progress_callback):
+    """Download and install a binary tool"""
+    os_type = 'linux' if OS_INFO['system'] == 'linux' else OS_INFO['system']
+    
+    if os_type not in config:
+        progress_callback(f"No installation config for {os_type}")
+        return False
+    
+    install_config = config[os_type]
+    url = install_config['url']
+    filename = install_config.get('filename', tool_name)
+    
+    progress_callback(f"Downloading {tool_name} from {url}")
+    
+    try:
+        # Download to temp directory
+        temp_dir = tempfile.mkdtemp()
+        temp_file = os.path.join(temp_dir, filename)
+        
+        cmd = f'curl -L -o {temp_file} {url}'
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=300)
+        
+        if result.returncode != 0:
+            progress_callback(f"Download failed: {result.stderr}")
+            return False
+        
+        # Handle extraction if needed
+        if install_config.get('extract'):
+            progress_callback(f"Extracting {filename}")
+            if url.endswith('.zip'):
+                subprocess.run(f'unzip -o {temp_file} -d {temp_dir}', shell=True)
+                # Find the actual binary
+                for root, dirs, files in os.walk(temp_dir):
+                    if filename in files:
+                        temp_file = os.path.join(root, filename)
+                        break
+        
+        # Make executable
+        os.chmod(temp_file, 0o755)
+        
+        # Move to /usr/local/bin
+        target = f'/usr/local/bin/{filename}'
+        if os.geteuid() == 0:  # Running as root
+            shutil.move(temp_file, target)
+        else:
+            cmd = f'sudo mv {temp_file} {target}'
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                # Fallback to user directory
+                user_bin = os.path.expanduser('~/.local/bin')
+                os.makedirs(user_bin, exist_ok=True)
+                target = os.path.join(user_bin, filename)
+                shutil.move(temp_file, target)
+                progress_callback(f"Installed to {target}")
+        
+        # Cleanup
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        
+        progress_callback(f"Successfully installed {tool_name}")
+        return True
+        
+    except Exception as e:
+        progress_callback(f"Installation error: {str(e)}")
+        return False
+
+def install_git_tool(tool_name, config, progress_callback):
+    """Clone and install a git-based tool"""
+    repo = config['repo']
+    script = config.get('script', tool_name)
+    
+    progress_callback(f"Cloning {repo}")
+    
+    try:
+        # Clone to tools directory
+        tool_dir = TOOLS_DIR / tool_name
+        if tool_dir.exists():
+            shutil.rmtree(tool_dir)
+        
+        cmd = f'git clone {repo} {tool_dir}'
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=300)
+        
+        if result.returncode != 0:
+            progress_callback(f"Clone failed: {result.stderr}")
+            return False
+        
+        # Find the script
+        script_path = tool_dir / script
+        if not script_path.exists():
+            # Try to find it
+            for file in tool_dir.glob('*'):
+                if file.name == script or file.name == f"{script}.sh" or file.name == f"{script}.py":
+                    script_path = file
+                    break
+        
+        if not script_path.exists():
+            progress_callback(f"Script {script} not found in repository")
+            return False
+        
+        # Make executable
+        os.chmod(script_path, 0o755)
+        
+        # Create symlink in /usr/local/bin or ~/.local/bin
+        link_name = tool_name
+        if os.geteuid() == 0:
+            link_target = f'/usr/local/bin/{link_name}'
+        else:
+            user_bin = os.path.expanduser('~/.local/bin')
+            os.makedirs(user_bin, exist_ok=True)
+            link_target = os.path.join(user_bin, link_name)
+        
+        # Remove existing link if present
+        if os.path.exists(link_target):
+            os.remove(link_target)
+        
+        # Create symlink
+        os.symlink(script_path, link_target)
+        
+        progress_callback(f"Successfully installed {tool_name}")
+        return True
+        
+    except Exception as e:
+        progress_callback(f"Installation error: {str(e)}")
+        return False
+
+def install_pip_tool(tool_name, package, progress_callback):
+    """Install a Python pip package"""
+    progress_callback(f"Installing Python package: {package}")
+    
+    # Determine pip command
+    pip_cmd = 'pip3' if shutil.which('pip3') else 'pip'
+    
+    cmd = f'{pip_cmd} install --user {package}'
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=300)
+    
+    if result.returncode == 0:
+        progress_callback(f"Successfully installed {tool_name}")
+        return True
+    else:
+        progress_callback(f"Failed to install {tool_name}: {result.stderr}")
+        return False
+
+def install_system_tool(tool_name, config, progress_callback):
+    """Install a system package"""
     pkg_manager = OS_INFO['package_manager']
     
-    commands_map = {
-        'subfinder': {
-            'linux': {
-                'check_go': True,
-                'commands': ['go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest'],
-                'verify': 'subfinder -version'
-            },
-            'darwin': {
-                'check_go': True,
-                'commands': ['go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest'],
-                'verify': 'subfinder -version'
-            },
-            'windows': {
-                'check_go': True,
-                'commands': ['go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest'],
-                'verify': 'subfinder -version'
-            }
-        },
-        'httpx': {
-            'linux': {
-                'check_go': True,
-                'commands': ['go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest'],
-                'verify': 'httpx -version'
-            },
-            'darwin': {
-                'check_go': True,
-                'commands': ['go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest'],
-                'verify': 'httpx -version'
-            },
-            'windows': {
-                'check_go': True,
-                'commands': ['go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest'],
-                'verify': 'httpx -version'
-            }
-        },
-        'nuclei': {
-            'linux': {
-                'check_go': True,
-                'commands': ['go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest'],
-                'verify': 'nuclei -version'
-            },
-            'darwin': {
-                'check_go': True,
-                'commands': ['go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest'],
-                'verify': 'nuclei -version'
-            },
-            'windows': {
-                'check_go': True,
-                'commands': ['go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest'],
-                'verify': 'nuclei -version'
-            }
-        },
-        'assetfinder': {
-            'linux': {
-                'check_go': True,
-                'commands': ['go install github.com/tomnomnom/assetfinder@latest'],
-                'verify': 'assetfinder --help'
-            },
-            'darwin': {
-                'check_go': True,
-                'commands': ['go install github.com/tomnomnom/assetfinder@latest'],
-                'verify': 'assetfinder --help'
-            },
-            'windows': {
-                'check_go': True,
-                'commands': ['go install github.com/tomnomnom/assetfinder@latest'],
-                'verify': 'assetfinder --help'
-            }
-        },
-        'nmap': {
-            'linux': {
-                'check_go': False,
-                'commands': [f'sudo {pkg_manager} update', f'sudo {pkg_manager} install -y nmap'] if not is_termux else ['pkg update', 'pkg install -y nmap'],
-                'verify': 'nmap --version'
-            },
-            'darwin': {
-                'check_go': False,
-                'commands': ['brew install nmap'],
-                'verify': 'nmap --version'
-            },
-            'windows': {
-                'check_go': False,
-                'commands': ['choco install nmap -y'],
-                'verify': 'nmap --version'
-            }
-        },
-        'findomain': {
-            'linux': {
-                'check_go': False,
-                'commands': [
-                    'wget -q https://github.com/findomain/findomain/releases/latest/download/findomain-linux -O /tmp/findomain',
-                    'chmod +x /tmp/findomain',
-                    'sudo mv /tmp/findomain /usr/local/bin/findomain' if not is_termux else 'mv /tmp/findomain $PREFIX/bin/findomain'
-                ],
-                'verify': 'findomain --version'
-            },
-            'darwin': {
-                'check_go': False,
-                'commands': ['brew install findomain'],
-                'verify': 'findomain --version'
-            },
-            'windows': {
-                'check_go': False,
-                'commands': ['choco install findomain -y'],
-                'verify': 'findomain --version'
-            }
-        },
-        'wafw00f': {
-            'linux': {
-                'check_go': False,
-                'commands': ['pip3 install wafw00f'] if shutil.which('pip3') else ['pip install wafw00f'],
-                'verify': 'wafw00f -h'
-            },
-            'darwin': {
-                'check_go': False,
-                'commands': ['pip3 install wafw00f'],
-                'verify': 'wafw00f -h'
-            },
-            'windows': {
-                'check_go': False,
-                'commands': ['pip install wafw00f'],
-                'verify': 'wafw00f -h'
-            }
-        },
-        'subgit': {
-            'linux': {
-                'check_go': True,
-                'commands': ['go install github.com/hahwul/subgit@latest'],
-                'verify': 'subgit -h'
-            },
-            'darwin': {
-                'check_go': True,
-                'commands': ['go install github.com/hahwul/subgit@latest'],
-                'verify': 'subgit -h'
-            },
-            'windows': {
-                'check_go': True,
-                'commands': ['go install github.com/hahwul/subgit@latest'],
-                'verify': 'subgit -h'
-            }
-        }
-    }
+    if pkg_manager not in config:
+        progress_callback(f"No package config for {pkg_manager}")
+        return False
     
-    tool_config = commands_map.get(tool_name, {})
+    package = config[pkg_manager]
+    progress_callback(f"Installing system package: {package}")
     
-    if is_termux and tool_name in commands_map:
-        return tool_config.get('linux', {})
+    if pkg_manager == 'apt':
+        cmds = [
+            f'sudo apt update',
+            f'sudo apt install -y {package}'
+        ]
+    elif pkg_manager == 'yum':
+        cmds = [f'sudo yum install -y {package}']
+    elif pkg_manager == 'pacman':
+        cmds = [f'sudo pacman -S --noconfirm {package}']
+    elif pkg_manager == 'brew':
+        cmds = [f'brew install {package}']
+    else:
+        progress_callback(f"Unknown package manager: {pkg_manager}")
+        return False
     
-    return tool_config.get(os_system, tool_config.get('linux', {}))
+    for cmd in cmds:
+        progress_callback(f"Running: {cmd}")
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            progress_callback(f"Command failed: {result.stderr}")
+            return False
+    
+    progress_callback(f"Successfully installed {tool_name}")
+    return True
 
 @app.route('/')
 def index():
@@ -234,6 +481,9 @@ def index():
 
 @app.route('/api/tools/install/<tool_name>', methods=['POST'])
 def install_tool(tool_name):
+    if tool_name not in TOOL_DEFINITIONS:
+        return jsonify({'error': f'Unknown tool: {tool_name}'}), 400
+    
     installation_id = f"{tool_name}_{int(time.time())}"
     installation_progress[installation_id] = {
         'status': 'starting',
@@ -262,130 +512,56 @@ def run_installation(tool_name, installation_id):
     
     try:
         log(f"Starting installation of {tool_name}")
-        log(f"OS: {OS_INFO['system']} ({OS_INFO['platform']})")
-        installation_progress[installation_id]['progress'] = 10
-        
-        tool_config = get_install_commands(tool_name)
-        
-        if not tool_config:
-            log(f"ERROR: Tool {tool_name} not supported")
-            installation_progress[installation_id]['status'] = 'error'
-            return
+        tool_def = TOOL_DEFINITIONS[tool_name]
+        tool_type = tool_def['type']
+        install_config = tool_def['install']
         
         installation_progress[installation_id]['progress'] = 20
         
-        if tool_config.get('check_go', False):
-            log("Checking for Go installation...")
-            go_path = shutil.which('go')
-            if not go_path:
+        success = False
+        
+        if tool_type == 'go':
+            # Check Go installation
+            if not shutil.which('go'):
                 log("ERROR: Go is not installed. Please run 'Auto Setup Environment' first")
                 installation_progress[installation_id]['status'] = 'error'
                 return
             
-            gopath_result = subprocess.run(['go', 'env', 'GOPATH'], 
-                                         capture_output=True, text=True)
-            if gopath_result.returncode == 0:
-                gopath = gopath_result.stdout.strip()
-                log(f"GOPATH: {gopath}")
-                os.environ['GOPATH'] = gopath
-                gobin = os.path.join(gopath, 'bin')
-                current_path = os.environ.get('PATH', '')
-                if gobin not in current_path:
-                    os.environ['PATH'] = f"{gobin}:{current_path}"
-        
-        installation_progress[installation_id]['progress'] = 30
-        
-        total_commands = len(tool_config['commands'])
-        for idx, cmd in enumerate(tool_config['commands']):
-            log(f"Executing [{idx+1}/{total_commands}]: {cmd}")
+            success = install_go_tool(tool_name, install_config['go_package'], log)
             
-            try:
+        elif tool_type == 'binary':
+            success = install_binary_tool(tool_name, install_config, log)
+            
+        elif tool_type == 'git':
+            success = install_git_tool(tool_name, install_config, log)
+            
+        elif tool_type == 'pip':
+            success = install_pip_tool(tool_name, install_config['package'], log)
+            
+        elif tool_type == 'system':
+            success = install_system_tool(tool_name, install_config, log)
+        
+        installation_progress[installation_id]['progress'] = 80
+        
+        # Verify installation
+        if 'verify' in install_config:
+            log("Verifying installation...")
+            verify_cmd = install_config.get('verify') or install_config.get('linux', {}).get('verify')
+            
+            if verify_cmd:
                 env = os.environ.copy()
+                env['PATH'] = f"{os.path.expanduser('~/.local/bin')}:{os.path.expanduser('~/go/bin')}:{env['PATH']}"
                 
-                if tool_config.get('check_go', False):
-                    gopath = subprocess.run(['go', 'env', 'GOPATH'], 
-                                         capture_output=True, text=True).stdout.strip()
-                    if gopath:
-                        gobin = os.path.join(gopath, 'bin')
-                        env['PATH'] = f"{gobin}:{env.get('PATH', '')}"
-                        env['GOPATH'] = gopath
+                result = subprocess.run(verify_cmd, shell=True, capture_output=True, 
+                                      text=True, env=env, timeout=10)
                 
-                process = subprocess.Popen(
-                    cmd,
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    env=env
-                )
-                
-                stdout, stderr = process.communicate(timeout=300)
-                
-                progress = 30 + ((idx + 1) / total_commands) * 50
-                installation_progress[installation_id]['progress'] = int(progress)
-                
-                if process.returncode == 0:
-                    log(f"✓ Command completed successfully")
-                    if stdout.strip():
-                        log(f"Output: {stdout.strip()[:200]}")
-                else:
-                    log(f"✗ Command failed with code {process.returncode}")
-                    if stderr.strip():
-                        log(f"Error: {stderr.strip()[:200]}")
-                    
-            except subprocess.TimeoutExpired:
-                log(f"✗ Command timed out after 300s")
-                installation_progress[installation_id]['status'] = 'error'
-                return
-            except Exception as e:
-                log(f"✗ Command error: {str(e)}")
+                if result.returncode == 0 or 'installed' in result.stdout:
+                    log("Verification successful!")
+                    success = True
         
-        installation_progress[installation_id]['progress'] = 90
-        time.sleep(1)
+        installation_progress[installation_id]['progress'] = 100
+        installation_progress[installation_id]['status'] = 'success' if success else 'error'
         
-        log(f"Verifying installation...")
-        
-        tool_path = find_tool_in_common_paths(tool_name)
-        
-        if tool_path:
-            log(f"✓ Tool found at: {tool_path}")
-            installation_progress[installation_id]['status'] = 'success'
-            installation_progress[installation_id]['progress'] = 100
-        else:
-            if 'verify' in tool_config:
-                verify_cmd = tool_config['verify']
-                log(f"Running verify command: {verify_cmd}")
-                
-                env = os.environ.copy()
-                if tool_config.get('check_go', False):
-                    gopath = subprocess.run(['go', 'env', 'GOPATH'], 
-                                         capture_output=True, text=True).stdout.strip()
-                    if gopath:
-                        gobin = os.path.join(gopath, 'bin')
-                        env['PATH'] = f"{gobin}:{env.get('PATH', '')}"
-                
-                verify_process = subprocess.run(
-                    verify_cmd,
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    env=env,
-                    timeout=10
-                )
-                
-                if verify_process.returncode == 0:
-                    log(f"✓ Verification successful!")
-                    installation_progress[installation_id]['status'] = 'success'
-                else:
-                    log(f"⚠ Tool installed but not in PATH")
-                    log(f"You may need to restart your terminal or add Go bin to PATH")
-                    installation_progress[installation_id]['status'] = 'warning'
-            else:
-                log(f"⚠ Could not verify installation")
-                installation_progress[installation_id]['status'] = 'warning'
-            
-            installation_progress[installation_id]['progress'] = 100
-            
     except Exception as e:
         log(f"ERROR: {str(e)}")
         installation_progress[installation_id]['status'] = 'error'
@@ -396,6 +572,53 @@ def get_install_progress(installation_id):
         return jsonify({'error': 'Installation not found'}), 404
     
     return jsonify(installation_progress[installation_id])
+
+@app.route('/api/tools/check')
+def check_tools():
+    status = {}
+    
+    for tool_name in TOOL_DEFINITIONS.keys():
+        tool_path = find_tool_in_common_paths(tool_name)
+        status[tool_name] = tool_path is not None
+        if tool_path:
+            logger.info(f"Found {tool_name} at: {tool_path}")
+    
+    gopath = None
+    try:
+        result = subprocess.run(['go', 'env', 'GOPATH'], 
+                              capture_output=True, text=True, timeout=2)
+        if result.returncode == 0:
+            gopath = result.stdout.strip()
+    except:
+        pass
+    
+    path_configured = False
+    if gopath:
+        gobin = os.path.join(gopath, 'bin')
+        path_configured = gobin in os.environ.get('PATH', '')
+    
+    return jsonify({
+        'tools': status,
+        'gopath': gopath,
+        'path_configured': path_configured,
+        'tool_descriptions': {name: info['description'] for name, info in TOOL_DEFINITIONS.items()}
+    })
+
+@app.route('/api/tools/list')
+def list_tools():
+    """List all available tools with their details"""
+    tools = []
+    for name, info in TOOL_DEFINITIONS.items():
+        tool_path = find_tool_in_common_paths(name)
+        tools.append({
+            'name': name,
+            'type': info['type'],
+            'description': info['description'],
+            'installed': tool_path is not None,
+            'path': tool_path
+        })
+    
+    return jsonify({'tools': tools})
 
 @app.route('/api/scan/start', methods=['POST'])
 def start_scan():
@@ -586,38 +809,6 @@ def get_logs(scan_id):
     logs = log_file.read_text()
     return jsonify({'logs': logs})
 
-@app.route('/api/tools/check')
-def check_tools():
-    tools = ['subfinder', 'findomain', 'assetfinder', 'httpx', 'nmap', 'wafw00f', 'subgit', 'nuclei']
-    status = {}
-    
-    gopath = None
-    try:
-        result = subprocess.run(['go', 'env', 'GOPATH'], 
-                              capture_output=True, text=True, timeout=2)
-        if result.returncode == 0:
-            gopath = result.stdout.strip()
-    except:
-        pass
-    
-    for tool in tools:
-        tool_path = find_tool_in_common_paths(tool)
-        status[tool] = tool_path is not None
-        
-        if tool_path:
-            logger.info(f"Found {tool} at: {tool_path}")
-    
-    path_configured = False
-    if gopath:
-        gobin = os.path.join(gopath, 'bin')
-        path_configured = gobin in os.environ.get('PATH', '')
-    
-    return jsonify({
-        'tools': status,
-        'gopath': gopath,
-        'path_configured': path_configured
-    })
-
 @app.route('/api/system/setup-environment', methods=['POST'])
 def setup_environment():
     setup_log = []
@@ -672,35 +863,33 @@ def setup_environment():
         except:
             setup_log.append("Could not modify .bashrc")
         
-        essential_tools = {
-            'subfinder': 'github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest',
-            'httpx': 'github.com/projectdiscovery/httpx/cmd/httpx@latest',
-            'nuclei': 'github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest',
-            'assetfinder': 'github.com/tomnomnom/assetfinder@latest'
-        }
+        # Install essential tools
+        essential_tools = ['subfinder', 'httpx', 'nuclei', 'assetfinder', 'waybackurls', 'dnsx']
         
         installed_tools = []
         env = os.environ.copy()
         env['PATH'] = f"{gobin}:{env.get('PATH', '')}"
         env['GOPATH'] = gopath
         
-        for tool_name, package in essential_tools.items():
-            setup_log.append(f"Installing {tool_name}...")
-            cmd = f'go install -v {package}'
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=300,
-                env=env
-            )
-            
-            if result.returncode == 0:
-                setup_log.append(f"✓ {tool_name} installed")
-                installed_tools.append(tool_name)
-            else:
-                setup_log.append(f"✗ {tool_name} failed: {result.stderr[:100]}")
+        for tool_name in essential_tools:
+            if tool_name in TOOL_DEFINITIONS and TOOL_DEFINITIONS[tool_name]['type'] == 'go':
+                setup_log.append(f"Installing {tool_name}...")
+                package = TOOL_DEFINITIONS[tool_name]['install']['go_package']
+                cmd = f'go install -v {package}'
+                result = subprocess.run(
+                    cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    env=env
+                )
+                
+                if result.returncode == 0:
+                    setup_log.append(f"{tool_name} installed")
+                    installed_tools.append(tool_name)
+                else:
+                    setup_log.append(f"{tool_name} failed: {result.stderr[:100]}")
         
         return jsonify({
             'status': 'success',
@@ -736,61 +925,58 @@ def check_system():
         'gopath': None,
         'python_version': None,
         'pip_installed': False,
+        'git_installed': False,
+        'curl_installed': False,
         'sudo_available': False,
         'path_configured': False
     }
     
     which_cmd = 'which' if os_info['system'] != 'windows' else 'where'
     
-    # Check Go installation
-    try:
-        go_check = subprocess.run([which_cmd, 'go'], capture_output=True, text=True, timeout=2)
-        system_info['go_installed'] = go_check.returncode == 0
+    # Check Go
+    go_check = subprocess.run([which_cmd, 'go'], capture_output=True, text=True)
+    system_info['go_installed'] = go_check.returncode == 0
+    
+    if system_info['go_installed']:
+        go_version = subprocess.run(['go', 'version'], capture_output=True, text=True)
+        system_info['go_version'] = go_version.stdout.strip()
         
-        if system_info['go_installed']:
-            go_version = subprocess.run(['go', 'version'], capture_output=True, text=True)
-            system_info['go_version'] = go_version.stdout.strip()
-            
-            gopath_result = subprocess.run(['go', 'env', 'GOPATH'], capture_output=True, text=True)
-            if gopath_result.returncode == 0:
-                gopath = gopath_result.stdout.strip()
-                system_info['gopath'] = gopath
-                gobin = os.path.join(gopath, 'bin')
-                system_info['path_configured'] = gobin in os.environ.get('PATH', '')
-    except Exception as e:
-        logger.error(f"Error checking Go: {e}")
+        gopath_result = subprocess.run(['go', 'env', 'GOPATH'], capture_output=True, text=True)
+        if gopath_result.returncode == 0:
+            gopath = gopath_result.stdout.strip()
+            system_info['gopath'] = gopath
+            gobin = os.path.join(gopath, 'bin')
+            system_info['path_configured'] = gobin in os.environ.get('PATH', '')
     
-    # Check Python version
-    try:
-        python_version = subprocess.run([sys.executable, '--version'], capture_output=True, text=True)
-        system_info['python_version'] = python_version.stdout.strip()
-    except Exception as e:
-        logger.error(f"Error checking Python: {e}")
+    # Check Python
+    python_version = subprocess.run([sys.executable, '--version'], capture_output=True, text=True)
+    system_info['python_version'] = python_version.stdout.strip()
     
-    # Check pip installation
-    try:
-        pip_check = subprocess.run([which_cmd, 'pip'], capture_output=True, text=True, timeout=2)
-        system_info['pip_installed'] = pip_check.returncode == 0
-        
-        if not system_info['pip_installed']:
-            # Also check for pip3
-            pip3_check = subprocess.run([which_cmd, 'pip3'], capture_output=True, text=True, timeout=2)
-            system_info['pip_installed'] = pip3_check.returncode == 0
-    except Exception as e:
-        logger.error(f"Error checking pip: {e}")
+    # Check pip
+    pip_check = subprocess.run([which_cmd, 'pip'], capture_output=True, text=True)
+    system_info['pip_installed'] = pip_check.returncode == 0
+    if not system_info['pip_installed']:
+        pip3_check = subprocess.run([which_cmd, 'pip3'], capture_output=True, text=True)
+        system_info['pip_installed'] = pip3_check.returncode == 0
     
-    # Check sudo availability (Linux/Mac only)
+    # Check git
+    git_check = subprocess.run([which_cmd, 'git'], capture_output=True, text=True)
+    system_info['git_installed'] = git_check.returncode == 0
+    
+    # Check curl
+    curl_check = subprocess.run([which_cmd, 'curl'], capture_output=True, text=True)
+    system_info['curl_installed'] = curl_check.returncode == 0
+    
+    # Check sudo
     if os_info['system'] != 'windows':
         try:
-            # Fix: Remove stderr=subprocess.DEVNULL when using capture_output=True
             sudo_check = subprocess.run(['sudo', '-n', 'true'], 
                                       stdout=subprocess.PIPE, 
                                       stderr=subprocess.PIPE, 
                                       text=True,
                                       timeout=2)
             system_info['sudo_available'] = sudo_check.returncode == 0
-        except Exception as e:
-            logger.debug(f"Error checking sudo: {e}")
+        except:
             system_info['sudo_available'] = False
     
     return jsonify(system_info)
@@ -810,7 +996,12 @@ def fix_path():
         shell_config = os.path.join(user_home, os_info.get('shell_config', '~/.bashrc').replace('~/', ''))
         gopath = subprocess.run(['go', 'env', 'GOPATH'], capture_output=True, text=True).stdout.strip()
         gobin = os.path.join(gopath, 'bin')
-        path_export = f'export PATH=$PATH:{gobin}'
+        local_bin = os.path.expanduser('~/.local/bin')
+        
+        path_exports = [
+            f'export PATH=$PATH:{gobin}',
+            f'export PATH=$PATH:{local_bin}'
+        ]
         
         try:
             with open(shell_config, 'r') as f:
@@ -818,21 +1009,27 @@ def fix_path():
         except FileNotFoundError:
             content = ''
         
-        if gobin not in content:
+        added = []
+        for path_export in path_exports:
+            if path_export not in content:
+                added.append(path_export)
+        
+        if added:
             with open(shell_config, 'a') as f:
-                f.write(f'\n# Go binaries path (added by ThreatScan UI)\n{path_export}\n')
+                f.write('\n# ThreatScan paths\n')
+                for export in added:
+                    f.write(f'{export}\n')
             
             return jsonify({
                 'status': 'success',
-                'message': f'Added Go path to {shell_config}',
+                'message': f'Added paths to {shell_config}',
                 'action_required': f'Run: source {shell_config} or restart terminal',
-                'gobin': gobin
+                'paths_added': added
             })
         else:
             return jsonify({
                 'status': 'already_configured',
-                'message': 'Go path already in shell config',
-                'gobin': gobin
+                'message': 'Paths already in shell config'
             })
             
     except Exception as e:

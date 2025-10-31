@@ -1,4 +1,4 @@
-# /mnt/e/development/work/Google/ThreatScanUI/backend/os_utils.py
+# ThreatScanUI/backend/os_utils.py
 
 import platform
 import os
