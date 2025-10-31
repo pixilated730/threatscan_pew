@@ -1,0 +1,25 @@
+# /mnt/e/development/work/Google/ThreatScanUI/.gitignore
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+venv/
+env/
+ENV/
+
+*.log
+logs/
+
+results/
+*.txt
+*.xml
+*.json
+
+.DS_Store
+.vscode/
+.idea/
+
+*.swp
+*.swo
+*~

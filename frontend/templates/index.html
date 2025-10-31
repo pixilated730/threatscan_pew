@@ -1,0 +1,159 @@
+<!-- /mnt/e/development/work/Google/ThreatScanUI/frontend/templates/index.html -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CCI ThreatScan - Automated Security Reconnaissance</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="banner">
+                <pre class="ascii-art">
+╔══════════════════════════════════════════════════════════════╗
+║                  CCI ThreatScan                              ║
+║                                                              ║
+║  Target Discovery | Subdomain Enumeration                   ║
+║  Live Detection | IP Resolution                             ║
+║  Port Scanning | WAF Detection                              ║
+║  Comprehensive Reporting                                     ║
+║  Organized Output | Cloud Provider Detection                ║
+╚══════════════════════════════════════════════════════════════╝
+                </pre>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <section class="scan-section">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>New Scan Configuration</h2>
+                    </div>
+                    <div class="card-body">
+                        <form id="scanForm">
+                            <div class="form-group">
+                                <label for="scanMode">Scan Mode</label>
+                                <select id="scanMode" name="scanMode" class="form-select">
+                                    <option value="single">Single Target</option>
+                                    <option value="bulk">Multiple Targets</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group" id="singleTargetGroup">
+                                <label for="target">Target Domain/IP</label>
+                                <input type="text" id="target" name="target" placeholder="example.com">
+                            </div>
+
+                            <div class="form-group" id="bulkTargetGroup" style="display: none;">
+                                <label for="bulkTargets">Targets (one per line)</label>
+                                <textarea id="bulkTargets" name="bulkTargets" rows="6" placeholder="example.com&#10;192.168.1.1&#10;test.com"></textarea>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="timeout">Timeout (seconds)</label>
+                                    <input type="number" id="timeout" name="timeout" value="300" min="60" max="3600">
+                                </div>
+                                <div class="form-group">
+                                    <label for="maxWorkers">Max Workers</label>
+                                    <input type="number" id="maxWorkers" name="maxWorkers" value="50" min="10" max="200">
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="enablePortScan" name="enablePortScan" checked>
+                                    <span>Enable Port Scanning</span>
+                                </label>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="enableWafDetection" name="enableWafDetection" checked>
+                                    <span>Enable WAF Detection</span>
+                                </label>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="enableGitDetection" name="enableGitDetection" checked>
+                                    <span>Enable Git Exposure Detection</span>
+                                </label>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="enableVulnScan" name="enableVulnScan" checked>
+                                    <span>Enable Vulnerability Scanning</span>
+                                </label>
+                            </div>
+
+                            <button type="submit" class="btn btn-primary">Start Scan</button>
+                        </form>
+                    </div>
+                </div>
+            </section>
+
+            <section class="tools-section">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Tool Status</h2>
+                        <div>
+                            <button id="autoSetupBtn" class="btn btn-small btn-primary">Auto Setup Environment</button>
+                            <button id="checkToolsBtn" class="btn btn-small">Refresh</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="info-banner" id="systemInfoBanner">
+                            <strong>System Requirements:</strong> Most tools require Go language. 
+                            <br>Click <strong>Auto Setup Environment</strong> to automatically install Go and essential tools.
+                            <br>Or install manually: <code>sudo apt install golang-go</code>
+                        </div>
+                        <div id="toolsStatus" class="tools-grid">
+                            <div class="loading">Checking tools...</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="scans-section">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Active & Recent Scans</h2>
+                        <button id="refreshScansBtn" class="btn btn-small">Refresh</button>
+                    </div>
+                    <div class="card-body">
+                        <div id="scansContainer">
+                            <div class="empty-state">No scans yet. Start your first scan above!</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="resultsSection" class="results-section" style="display: none;">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Scan Results</h2>
+                        <button id="closeResultsBtn" class="btn btn-small">Close</button>
+                    </div>
+                    <div class="card-body">
+                        <div id="resultsContainer"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <p>CCI ThreatScan 2025 - Automated Security Reconnaissance Platform</p>
+        </footer>
+    </div>
+
+    <div id="notification" class="notification"></div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
